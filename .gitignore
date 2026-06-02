@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+ENV/
+.env.local
+
+# Database files (إذا كنت تستخدم SQLite أو مشابه)
+*.db
+*.sqlite
+*.sqlite3
+
+# Uploaded files
+uploads/
+uploaded_files/
+media/
+
+# Environment variables
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# OS metadata
+.DS_Store
+Thumbs.db
