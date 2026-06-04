@@ -1,10 +1,10 @@
 import os
 import re
-import requests  # ← تعديل: مطلوب لـ Jina API (كان موجوداً في chat() فقط، نقله للأعلى)
+import time
 from typing import List, Optional
 
 import numpy as np
-# ← تعديل: حُذف "from sentence_transformers import SentenceTransformer" — لم يعد مستخدماً
+import requests
 from pymongo.errors import PyMongoError
 
 # ─── MongoDB ──────────────────────────────────────────────────────────────────
@@ -14,19 +14,18 @@ from database import (
     COL_GRANTS, COL_FACULTIES, COL_PROGRAMS, COL_DIPLOMA,
     COL_RANKINGS,
 )
+from postgres_db import get_postgres_student_profile
 
-# ─── Uploaded Files DB ────────────────────────────────────────────────────────
-# ← إضافة: استيراد مدير قاعدة بيانات الملفات المرفوعة فقط — لا يؤثر على أي شيء قائم
 from uploaded_files_db import (
     get_uploaded_collection,
     list_uploaded_collections,
 )
 
 # ─── Config ───────────────────────────────────────────────────────────────────
-EMBED_MODEL   = "jina-embeddings-v3"  # ← تعديل: اسم موديل Jina بدل paraphrase-multilingual-MiniLM-L12-v2
+EMBED_MODEL   = "jina-embeddings-v3"
 GROQ_MODEL    = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 GROQ_API_KEY  = os.getenv("GROQ_API_KEY", "")
-JINA_API_KEY  = os.getenv("JINA_API_KEY", "")  # ← تعديل: قراءة Jina API key من .env
+JINA_API_KEY  = os.getenv("JINA_API_KEY", "")
 TOP_K         = 5
 MAX_HISTORY   = 20
 SIM_THRESHOLD = 0.25
@@ -60,7 +59,6 @@ SYSTEM_PROMPT_TEMPLATE = """\
 """
 
 # ─── System Prompt للملفات المرفوعة (منفصل تماماً) ───────────────────────────
-# ← إضافة: prompt مخصص للإجابة من الملفات المرفوعة فقط دون أي خلط مع البيانات الأصلية
 UPLOADED_FILE_SYSTEM_PROMPT = """\
 أنت مساعد ذكي متخصص في الإجابة على الأسئلة بناءً على محتوى الملف المُرفق فقط.
 
@@ -128,13 +126,10 @@ class IUGChatbot:
         self._data: dict = None
         self._chunks: List[str] = None
         self._index: np.ndarray = None
-        self._embedder = None  # ← تعديل: النوع أصبح None بدل SentenceTransformer (لا نحتاج نموذجاً محلياً)
         self._sessions: dict = {}
         self._alias_index: list = None  # built lazily once
 
-        # ← إضافة: متغيرات الملفات المرفوعة — منفصلة تماماً عن متغيرات النظام الأصلي
         self._uploaded_chunks: dict = {}   # {collection_name: [chunks]}
-        self._uploaded_index:  dict = {}   # {collection_name: np.ndarray}
 
     def initialize(self):
         """Load data, build chunks, load embedder, build semantic index."""
@@ -143,16 +138,14 @@ class IUGChatbot:
         self._chunks = self._build_chunks(self._data)
         print(f"✅ Built {len(self._chunks)} chunks.")
 
-        # ← تعديل: حُذف تحميل SentenceTransformer — Jina API لا يحتاج نموذجاً محلياً
         print(f"⏳ Using Jina Embeddings API — model: '{EMBED_MODEL}' …")
         if not JINA_API_KEY:
             raise RuntimeError("❌ JINA_API_KEY غير موجود — أضفه في ملف .env")
 
         print("⏳ Building semantic index …")
-        self._index = self._build_index(self._chunks)  # ← تعديل: حُذف تمرير self._embedder
+        self._index = self._build_index(self._chunks)
         print(f"✅ Semantic index ready — shape: {self._index.shape}")
 
-        # ← إضافة: تحميل الملفات المرفوعة المخزنة مسبقاً في MongoDB عند بدء التشغيل
         self._load_all_uploaded_files()
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -464,7 +457,6 @@ class IUGChatbot:
     #  SECTION 3 — SEMANTIC INDEX
     # ═════════════════════════════════════════════════════════════════════════
 
-    # ← تعديل: دالة مساعدة جديدة لاستدعاء Jina API — ضرورية لاستبدال model.encode()
     @staticmethod
     def _jina_embed(texts: List[str]) -> np.ndarray:
         """استدعاء Jina Embeddings API وإرجاع مصفوفة numpy."""
@@ -473,7 +465,6 @@ class IUGChatbot:
             "Content-Type": "application/json",
             "Authorization": f"Bearer {JINA_API_KEY}",
         }
-        # ← Jina API تقبل batch كامل في طلب واحد بدل encode() المحلي
         data = {
             "model": EMBED_MODEL,
             "input": texts,
@@ -491,8 +482,6 @@ class IUGChatbot:
         الانتظار: 2s → 4s → 8s → 16s (قابل للتمديد عبر max_retries).
         يُعيد نص الإجابة مباشرة عند النجاح، ويرفع RuntimeError عند الفشل.
         """
-        import time as _time
-
         url = "https://api.groq.com/openai/v1/chat/completions"
 
         for attempt in range(1, max_retries + 1):
@@ -508,7 +497,7 @@ class IUGChatbot:
                         f"⚠️  Groq 429 — المحاولة {attempt}/{max_retries}، "
                         f"انتظار {wait:.1f}s …"
                     )
-                    _time.sleep(wait)
+                    time.sleep(wait)
                     continue
 
                 resp.raise_for_status()
@@ -522,7 +511,7 @@ class IUGChatbot:
                 if attempt < max_retries:
                     wait = 2 ** attempt
                     print(f"⏱️  Groq Timeout — المحاولة {attempt}/{max_retries}، انتظار {wait}s …")
-                    _time.sleep(wait)
+                    time.sleep(wait)
                     continue
                 raise RuntimeError("❌ Groq API استغرق وقتاً طويلاً — حاول مرة أخرى.")
             except Exception as exc:
@@ -534,10 +523,7 @@ class IUGChatbot:
         )
 
     @staticmethod
-    def _build_index(chunks: List[str]) -> np.ndarray:  # ← تعديل: حُذف بارامتر model — لا نحتاجه مع Jina
-        # ← تعديل: استبدال model.encode() بـ _jina_embed() عبر Jina API
-        # Jina API لا تدعم show_progress_bar أو batch_size بنفس طريقة SentenceTransformer
-        # لذا نرسل كل الـ chunks دفعة واحدة (أو يمكن تقسيمها يدوياً إذا كثرت)
+    def _build_index(chunks: List[str]) -> np.ndarray:
         batch_size = 64
         all_embeddings = []
         for i in range(0, len(chunks), batch_size):
@@ -546,7 +532,6 @@ class IUGChatbot:
             embeddings = IUGChatbot._jina_embed(batch)
             all_embeddings.append(embeddings)
         result = np.vstack(all_embeddings) if all_embeddings else np.array([], dtype=np.float32)
-        # ← تعديل: normalize_embeddings يدوياً بدل خيار SentenceTransformer
         norms = np.linalg.norm(result, axis=1, keepdims=True)
         norms = np.where(norms == 0, 1, norms)
         return result / norms
@@ -557,7 +542,6 @@ class IUGChatbot:
         top_k: int = TOP_K,
         threshold: float = SIM_THRESHOLD,
     ) -> List[str]:
-        # ← تعديل: استبدال self._embedder.encode() بـ _jina_embed() — نفس المنطق، مصدر مختلف
         q_arr = self._jina_embed([question])
         # normalize
         norm  = np.linalg.norm(q_arr)
@@ -627,7 +611,6 @@ class IUGChatbot:
     def _load_all_uploaded_files(self):
         """
         تحميل جميع الملفات المرفوعة من MongoDB عند بدء التشغيل.
-        يُبنى index منفصل لكل collection.
         """
         try:
             collections = list_uploaded_collections()
@@ -636,18 +619,18 @@ class IUGChatbot:
                 return
 
             for col_name in collections:
-                self._index_uploaded_collection(col_name)
+                self._load_uploaded_collection(col_name)
 
             print(f"✅ Loaded {len(self._uploaded_chunks)} uploaded file(s).")
         except Exception as exc:
             print(f"⚠️  Could not load uploaded files: {exc}")
 
-    def _index_uploaded_collection(self, collection_name: str):
+    def _load_uploaded_collection(self, collection_name: str):
         """
-        بناء chunks + index لـ collection واحدة من الملفات المرفوعة.
-        يُستدعى عند التحميل الأولي وعند رفع ملف جديد.
+        بناء chunks لـ collection واحدة من الملفات المرفوعة.
+        يُستدعى عند التحميل الأولي وعند رفع ملف جديد أو إعادة التحميل.
         """
-        col  = get_uploaded_collection(collection_name)
+        col = get_uploaded_collection(collection_name)
         docs = list(col.find({}))
 
         if not docs:
@@ -657,16 +640,12 @@ class IUGChatbot:
         if not chunks:
             return
 
-        print(f"   ⏳ Building index for uploaded file '{collection_name}' ({len(chunks)} chunks) …")
-        index = self._build_index(chunks)
-
         self._uploaded_chunks[collection_name] = chunks
-        self._uploaded_index[collection_name]  = index
-        print(f"   ✅ Index ready for '{collection_name}'.")
+        print(f"   ✅ Loaded uploaded file '{collection_name}' ({len(chunks)} chunks).")
 
     def upload_json_file(self, collection_name: str, json_data: list) -> dict:
         """
-        رفع ملف JSON إلى MongoDB (قاعدة بيانات uploaded_files) وبناء index له.
+        رفع ملف JSON إلى MongoDB (قاعدة بيانات uploaded_files) وتحضيره للمحادثة.
         
         - collection_name: اسم الـ collection (اسم الملف)
         - json_data: محتوى الملف كـ list of dicts أو dict واحد
@@ -699,43 +678,9 @@ class IUGChatbot:
         if cleaned:
             col.insert_many(cleaned)
 
-        # إعادة بناء الـ index للـ collection هذه
-        self._index_uploaded_collection(collection_name)
+        self._load_uploaded_collection(collection_name)
 
         return {"inserted": len(cleaned), "collection": collection_name}
-
-    def _semantic_search_uploaded(
-        self,
-        collection_name: str,
-        question: str,
-        top_k: int = TOP_K,
-        threshold: float = SIM_THRESHOLD,
-    ) -> List[str]:
-        """
-        بحث دلالي داخل ملف مرفوع واحد — منفصل تماماً عن البحث الأصلي.
-        """
-        if collection_name not in self._uploaded_index:
-            return []
-
-        index  = self._uploaded_index[collection_name]
-        chunks = self._uploaded_chunks[collection_name]
-
-        q_arr = self._jina_embed([question])
-        norm  = np.linalg.norm(q_arr)
-        q_vec = (q_arr / norm if norm != 0 else q_arr).T
-
-        scores = (index @ q_vec).flatten()
-        ranked = np.argsort(scores)[::-1]
-
-        results = []
-        for idx in ranked[:top_k]:
-            if float(scores[idx]) >= threshold:
-                results.append(chunks[int(idx)])
-
-        if not results and len(chunks) > 0:
-            results.append(chunks[int(ranked[0])])
-
-        return results
 
     def chat_with_file(
         self,
@@ -755,13 +700,8 @@ class IUGChatbot:
                 "source":     "uploaded_file",
             }
 
-        # البحث الدلالي في الملف المرفوع فقط
-        relevant_chunks = self._semantic_search_uploaded(
-            collection_name = collection_name,
-            question        = question,
-            top_k           = TOP_K,
-            threshold       = SIM_THRESHOLD,
-        )
+        # استخدم كل بيانات الملف المرفوع كسياق، بدون حصرها بأفضل TOP_K نتائج.
+        relevant_chunks = self._uploaded_chunks[collection_name]
 
         if not relevant_chunks:
             return {
@@ -792,7 +732,6 @@ class IUGChatbot:
                 {"role": "user",   "content": user_message},
             ],
             "temperature": 0.05,
-            "max_tokens":  512,
         }
 
         answer = self._call_groq(headers, payload)
@@ -800,7 +739,7 @@ class IUGChatbot:
 
         return {
             "answer":     answer,
-            "top_chunks": [c[:150] + " …" for c in relevant_chunks],
+            "top_chunks": relevant_chunks,
             "source":     "uploaded_file",
         }
 
@@ -817,7 +756,7 @@ class IUGChatbot:
     def reload_uploaded_file(self, collection_name: str) -> bool:
         """إعادة تحميل ملف مرفوع من MongoDB (مفيد بعد تعديل البيانات يدوياً)."""
         try:
-            self._index_uploaded_collection(collection_name)
+            self._load_uploaded_collection(collection_name)
             return True
         except Exception:
             return False
@@ -827,7 +766,6 @@ class IUGChatbot:
         from uploaded_files_db import drop_uploaded_collection
         drop_uploaded_collection(collection_name)
         self._uploaded_chunks.pop(collection_name, None)
-        self._uploaded_index.pop(collection_name, None)
         return True
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -1127,6 +1065,57 @@ class IUGChatbot:
             lines.append(f"  • {p['name']}  |  الساعة: {price} دينار  |  القبول: {rate}")
         return "\n".join(lines)
 
+    @staticmethod
+    def _build_postgres_student_context(profile: Optional[dict]) -> str:
+        if not profile:
+            return ""
+
+        student = profile.get("student") or {}
+        lines = [
+            "بيانات الطالب الحالي من EduPredict PostgreSQL (سري — للطالب نفسه فقط):",
+            f"الاسم: {student.get('student_name') or 'غير متوفر'}",
+            f"رقم الطالب: {student.get('id_student') or 'غير متوفر'}",
+        ]
+        if student.get("email"):
+            lines.append(f"البريد الإلكتروني: {student['email']}")
+
+        enrollments = profile.get("enrollments") or []
+        if enrollments:
+            lines.append("\nالتسجيلات الأكاديمية:")
+            for enrollment in enrollments:
+                lines.extend([
+                    f"- رقم التسجيل: {enrollment.get('id')}",
+                    f"  المقرر/العرض: {enrollment.get('course_presentation_id')}",
+                    f"  النتيجة النهائية: {enrollment.get('final_result') or 'غير متوفرة'}",
+                    f"  الساعات المدروسة: {enrollment.get('studied_credits') or 'غير متوفرة'}",
+                    f"  المنطقة: {enrollment.get('region') or 'غير متوفرة'}",
+                    f"  الفئة العمرية: {enrollment.get('age_band') or 'غير متوفرة'}",
+                    f"  المؤهل الأعلى: {enrollment.get('highest_education') or 'غير متوفر'}",
+                ])
+
+        predictions = profile.get("predictions") or []
+        if predictions:
+            lines.append("\nآخر توقعات المخاطر الأكاديمية:")
+            for prediction in predictions:
+                lines.extend([
+                    f"- اليوم الدراسي: {prediction.get('day_of_course')}",
+                    f"  مستوى الخطر: {prediction.get('risk_level')}",
+                    f"  احتمالية الخطر: {prediction.get('risk_probability')}",
+                    f"  الإجراء المقترح: {prediction.get('recommended_action') or 'غير متوفر'}",
+                ])
+
+        assessments = profile.get("assessments") or []
+        if assessments:
+            lines.append("\nآخر التقييمات:")
+            for assessment in assessments:
+                lines.append(
+                    f"- تقييم {assessment.get('id_assessment')}: "
+                    f"العلامة {assessment.get('score') or 'غير متوفرة'}، "
+                    f"تاريخ التسليم {assessment.get('date_submitted')}"
+                )
+
+        return "\n".join(lines)
+
     def fast_retrieval(self, question: str) -> Optional[str]:
         if not question or not question.strip():
             return None
@@ -1185,6 +1174,7 @@ class IUGChatbot:
         current_student = next(
             (s for s in rankings_data if s.get("student_id") == session_id), None
         )
+        postgres_profile = None if current_student else get_postgres_student_profile(session_id)
         if asking_about_ranking:
             other_names = [
                 s["student_name"].split()[0]
@@ -1210,6 +1200,9 @@ class IUGChatbot:
             context = "\n\n---\n\n".join(
                 ([student_context_chunk] if student_context_chunk else []) + general_chunks
             )
+        elif postgres_profile:
+            student_context_chunk = self._build_postgres_student_context(postgres_profile)
+            context = "\n\n---\n\n".join([student_context_chunk] + general_chunks)
         else:
             context = "\n\n---\n\n".join(general_chunks)
 
@@ -1220,6 +1213,14 @@ class IUGChatbot:
                 f"\n\nالطالب الذي يحادثك الآن: {current_student['student_name']} "
                 f"(رقم الهوية: {current_student['student_id']}). "
                 f"أجبه عن بياناته مباشرة دون تحفظ، ولا تكشف بيانات أي طالب آخر."
+            )
+        elif postgres_profile:
+            student = postgres_profile["student"]
+            identity_note = (
+                f"\n\nالطالب الذي يحادثك الآن: {student.get('student_name')} "
+                f"(رقم الطالب: {student.get('id_student')}). "
+                f"أجبه عن بياناته الشخصية والأكاديمية المتوفرة في السياق مباشرة، "
+                f"ولا تطلب منه رقم الطالب مرة أخرى."
             )
 
         history      = self.get_history(session_id)
@@ -1245,7 +1246,6 @@ class IUGChatbot:
                 {"role": "user",   "content": user_message},
             ],
             "temperature": 0.05,
-            "max_tokens":  512,
         }
 
         answer = self._call_groq(headers, payload)
@@ -1253,5 +1253,5 @@ class IUGChatbot:
 
         return {
             "answer":     answer,
-            "top_chunks": [c[:150] + " …" for c in general_chunks],
+            "top_chunks": general_chunks,
         }
