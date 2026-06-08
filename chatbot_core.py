@@ -751,25 +751,14 @@ class IUGChatbot:
         }
 
     def get_uploaded_files_list(self) -> List[dict]:
-        """إرجاع قائمة الملفات المرفوعة من MongoDB مباشرةً (مصدر الحقيقة)."""
-        from uploaded_files_db import list_uploaded_collections, get_uploaded_collection
-        try:
-            collections = list_uploaded_collections()
-            result = []
-            for col_name in collections:
-                chunks_in_memory = self._uploaded_chunks.get(col_name, [])
-                count = len(chunks_in_memory) if chunks_in_memory else get_uploaded_collection(col_name).count_documents({})
-                result.append({
-                    "collection": col_name,
-                    "chunks_count": count,
-                })
-            return result
-        except Exception:
-            # fallback للـ memory لو MongoDB تعطّل
-            return [
-                {"collection": name, "chunks_count": len(chunks)}
-                for name, chunks in self._uploaded_chunks.items()
-            ]
+        """إرجاع قائمة الملفات المرفوعة مع عدد الـ chunks لكل منها."""
+        return [
+            {
+                "collection": name,
+                "chunks_count": len(chunks),
+            }
+            for name, chunks in self._uploaded_chunks.items()
+        ]
 
     def reload_uploaded_file(self, collection_name: str) -> bool:
         """إعادة تحميل ملف مرفوع من MongoDB (مفيد بعد تعديل البيانات يدوياً)."""
@@ -780,11 +769,10 @@ class IUGChatbot:
             return False
 
     def delete_uploaded_file(self, collection_name: str) -> bool:
-        """حذف ملف مرفوع من قاعدة البيانات والذاكرة."""
+        """حذف ملف مرفوع من الذاكرة وقاعدة البيانات."""
         from uploaded_files_db import drop_uploaded_collection
         drop_uploaded_collection(collection_name)
         self._uploaded_chunks.pop(collection_name, None)
-        print(f"🗑️  Deleted uploaded file '{collection_name}' from DB and memory.")
         return True
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -1278,16 +1266,6 @@ class IUGChatbot:
             context = "\n\n---\n\n".join([student_context_chunk] + general_chunks)
         else:
             context = "\n\n---\n\n".join(general_chunks)
-
-        # ── Step 1e: إضافة chunks الملفات المرفوعة إلى الـ context ─────────────
-        all_uploaded_chunks = [
-            chunk
-            for chunks in self._uploaded_chunks.values()
-            for chunk in chunks
-        ]
-        if all_uploaded_chunks:
-            uploaded_context = "\n\n---\n\n".join(all_uploaded_chunks)
-            context = context + "\n\n---\n\n[معلومات إضافية من ملفات مرفوعة]\n" + uploaded_context
 
         # ── Step 2: build prompt ─────────────────────────────────────────────
         identity_note = ""
