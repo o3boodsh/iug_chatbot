@@ -165,7 +165,7 @@ def get_postgres_student_profile(student_id: str) -> Optional[dict]:
         JOIN enrollments e ON e.id = p.enrollment_id
         WHERE e.id_student = :student_id
         ORDER BY p.created_at DESC
-        LIMIT 5
+        LIMIT 1
         """,
         {"student_id": student_id},
     )

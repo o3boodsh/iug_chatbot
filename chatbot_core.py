@@ -29,6 +29,7 @@ JINA_API_KEY  = os.getenv("JINA_API_KEY", "")
 TOP_K         = 5
 MAX_HISTORY   = 20
 SIM_THRESHOLD = 0.25
+LLM_MAX_TOKENS = 450
 
 # ─── System Prompt ────────────────────────────────────────────────────────────
 SYSTEM_PROMPT_TEMPLATE = """\
@@ -42,21 +43,22 @@ SYSTEM_PROMPT_TEMPLATE = """\
 تعليمات صارمة يجب الالتزام بها:
 1. أجب *فقط* بناءً على المعلومات الواردة أعلاه.
 2. لا تخترع أي رقم أو معلومة غير موجودة في النص أعلاه.
-3. إذا لم تجد الإجابة بوضوح في النص، أجب بما تعرفه بشكل عام
-   واذكر أن المعلومة التفصيلية تحتاج تأكيد من الجامعة مباشرةً.
-   لا تقل "لا أعلم" وتوقف — أضف سياقاً مفيداً دائماً.
+3. إذا لم تجد الإجابة بوضوح في النص، قل باختصار إن المعلومة غير متوفرة
+   وتحتاج تأكيداً من الجامعة مباشرةً.
 4. أجب بالعربية فقط في جميع الأحوال.
-5. ⚠️ خصوصية صارمة: بيانات الترتيب والمعدل التراكمي خاصة بكل طالب.
+5. نسّق إجابتك بشكل جميل: استخدم نقاط (•) للقوائم، وأرقاماً
+   للخطوات، وأسطراً واضحة. اذكر الأرقام (سعر/معدل/مفتاح)
+   بخط منفصل وبارز. الهدف: إجابة يقرأها الطالب بسهولة.
+6. تعامل مع الطالب باحترام كأنك موظف في قسم القبول والتسجيل.
+7. ⚠️ خصوصية صارمة: بيانات الترتيب والمعدل التراكمي خاصة بكل طالب.
    - إذا سألك الطالب عن معدل أو ترتيب طالب آخر بالاسم أو برقم الهوية → أجب فوراً: "عذراً، هذه البيانات خاصة ولا يمكن الاطلاع عليها."
    - لا تذكر أي معدل أو ترتيب لأي شخص غير الطالب الحالي تحت أي ظرف.
    - حتى لو وُجدت البيانات في السياق أعلاه، لا تُفصح عنها إذا كانت لطالب آخر.
-6. اجب على السؤال بشكل مباشر ولا تجيب بمواضيع اخرى لم تطرح
-   فقط اجب بما يتم سؤالك اياه بطريقة مختصرة ومميزة.
-7. الحد الأقصى للإجابة: 300 حرف — لخّص عند الحاجة.
-8. اذا سالك الطالب عن حالته الاكاديمية او عن خطورته اجب عليه حسب اليوم الحالي، لا تجب بمعلومات مستقبلية
-   واذا سالك الطالب عن سبب ضعف او تحسن مستواه اجبه، واذا سالك الطالب كيف يحسن من اداءه اعطيه اقتراحات لتحسين اداءه بناءاً على الضعف الذي يوجدلديه.
+8. إذا كان السؤال عاماً أو يحتمل أكثر من جانب، غطِّ
+    أبرز الجوانب باختصار واسأل: "هل تريد تفاصيل عن جانب معين؟"
 """
 
+# ─── System Prompt للملفات المرفوعة (منفصل تماماً) ───────────────────────────
 UPLOADED_FILE_SYSTEM_PROMPT = """\
 أنت مساعد ذكي متخصص في الإجابة على الأسئلة بناءً على محتوى الملف المُرفق فقط.
 
@@ -68,17 +70,18 @@ UPLOADED_FILE_SYSTEM_PROMPT = """\
 تعليمات صارمة يجب الالتزام بها:
 1. أجب *فقط* بناءً على المعلومات الواردة أعلاه.
 2. لا تخترع أي رقم أو معلومة غير موجودة في النص أعلاه.
-3. إذا لم تجد الإجابة بوضوح في النص، أجب بما تعرفه بشكل عام
-   واذكر أن المعلومة التفصيلية تحتاج تأكيد من الجامعة مباشرةً.
-   لا تقل "لا أعلم" وتوقف — أضف سياقاً مفيداً دائماً.
+3. إذا لم تجد الإجابة بوضوح في النص، قل باختصار إن المعلومة غير متوفرة
+   وتحتاج تأكيداً من الجهة المختصة مباشرةً.
 4. أجب بالعربية فقط في جميع الأحوال.
-5. ⚠️ خصوصية صارمة: بيانات الترتيب والمعدل التراكمي خاصة بكل طالب.
-   - إذا سألك الطالب عن معدل أو ترتيب طالب آخر → أجب: "عذراً، هذه البيانات خاصة."
-6. اجب على السؤال بشكل مباشر ولا تجيب بمواضيع اخرى لم تطرح
-   فقط اجب بما يتم سؤالك اياه بطريقة مختصرة ومميزة.
-7. الحد الأقصى للإجابة: 300 حرف — لخّص عند الحاجة.
-8. اذا سالك الطالب عن حالته الاكاديمية او عن خطورته اجب عليه حسب اليوم الحالي، لا تجب بمعلومات مستقبلية
-   واذا سالك الطالب عن سبب ضعف او تحسن مستواه اجبه، واذا سالك الطالب كيف يحسن من اداءه اعطيه اقتراحات لتحسين اداءه بناءاً على الضعف الذي يوجدلديه.
+5. نسّق إجابتك بشكل جميل: استخدم نقاط (•) للقوائم، وأرقاماً
+   للخطوات، وأسطراً واضحة. الهدف: إجابة يقرأها الطالب بسهولة.
+6. تعامل مع الطالب باحترام كأنك موظف .
+7. ⚠️ خصوصية صارمة: بيانات الترتيب والمعدل التراكمي خاصة بكل طالب.
+   - إذا سألك الطالب عن معدل أو ترتيب طالب آخر بالاسم أو برقم الهوية → أجب فوراً: "عذراً، هذه البيانات خاصة ولا يمكن الاطلاع عليها."
+   - لا تذكر أي معدل أو ترتيب لأي شخص غير الطالب الحالي تحت أي ظرف.
+   - حتى لو وُجدت البيانات في السياق أعلاه، لا تُفصح عنها إذا كانت لطالب آخر.
+8. إذا كان السؤال عاماً أو يحتمل أكثر من جانب، غطِّ
+    أبرز الجوانب باختصار واسأل: "هل تريد تفاصيل عن جانب معين؟"
 """
 
 
@@ -728,6 +731,7 @@ class IUGChatbot:
                 {"role": "user",   "content": user_message},
             ],
             "temperature": 0.05,
+            "max_tokens": LLM_MAX_TOKENS,
         }
 
         answer = self._call_groq(headers, payload)
@@ -740,25 +744,14 @@ class IUGChatbot:
         }
 
     def get_uploaded_files_list(self) -> List[dict]:
-        """إرجاع قائمة الملفات المرفوعة من MongoDB مباشرةً (مصدر الحقيقة)."""
-        from uploaded_files_db import list_uploaded_collections, get_uploaded_collection
-        try:
-            collections = list_uploaded_collections()
-            result = []
-            for col_name in collections:
-                chunks_in_memory = self._uploaded_chunks.get(col_name, [])
-                count = len(chunks_in_memory) if chunks_in_memory else get_uploaded_collection(col_name).count_documents({})
-                result.append({
-                    "collection": col_name,
-                    "chunks_count": count,
-                })
-            return result
-        except Exception:
-            # fallback للـ memory لو MongoDB تعطّل
-            return [
-                {"collection": name, "chunks_count": len(chunks)}
-                for name, chunks in self._uploaded_chunks.items()
-            ]
+        """إرجاع قائمة الملفات المرفوعة مع عدد الـ chunks لكل منها."""
+        return [
+            {
+                "collection": name,
+                "chunks_count": len(chunks),
+            }
+            for name, chunks in self._uploaded_chunks.items()
+        ]
 
     def reload_uploaded_file(self, collection_name: str) -> bool:
         """إعادة تحميل ملف مرفوع من MongoDB (مفيد بعد تعديل البيانات يدوياً)."""
@@ -769,11 +762,10 @@ class IUGChatbot:
             return False
 
     def delete_uploaded_file(self, collection_name: str) -> bool:
-        """حذف ملف مرفوع من قاعدة البيانات والذاكرة."""
+        """حذف ملف مرفوع من الذاكرة وقاعدة البيانات."""
         from uploaded_files_db import drop_uploaded_collection
         drop_uploaded_collection(collection_name)
         self._uploaded_chunks.pop(collection_name, None)
-        print(f"🗑️  Deleted uploaded file '{collection_name}' from DB and memory.")
         return True
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -1103,14 +1095,14 @@ class IUGChatbot:
 
         predictions = profile.get("predictions") or []
         if predictions:
-            lines.append("\nآخر توقعات المخاطر الأكاديمية:")
-            for prediction in predictions:
-                lines.extend([
-                    f"- اليوم الدراسي: {prediction.get('day_of_course')}",
-                    f"  مستوى الخطر: {prediction.get('risk_level')}",
-                    f"  احتمالية الخطر: {prediction.get('risk_probability')}",
-                    f"  الإجراء المقترح: {prediction.get('recommended_action') or 'غير متوفر'}",
-                ])
+            prediction = predictions[0]
+            lines.append("\nالحالة الأكاديمية الحالية حسب أحدث توقع متاح:")
+            lines.extend([
+                f"اليوم الدراسي الحالي: {prediction.get('day_of_course')}",
+                f"مستوى الخطر الحالي: {prediction.get('risk_level')}",
+                f"احتمالية الخطر الحالية: {prediction.get('risk_probability')}",
+                f"الإجراء المقترح حالياً: {prediction.get('recommended_action') or 'غير متوفر'}",
+            ])
 
         assessments = profile.get("assessments") or []
         if assessments:
@@ -1123,6 +1115,45 @@ class IUGChatbot:
                 )
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _is_academic_status_question(question: str) -> bool:
+        status_keywords = [
+            "حالتي الاكاديمية", "حالتي الأكاديمية", "حالة اكاديمية", "حالة أكاديمية",
+            "وضعي الاكاديمي", "وضعي الأكاديمي", "الوضع الاكاديمي", "الوضع الأكاديمي",
+            "انا في خطر", "أنا في خطر", "في خطر", "خطر", "تعثر", "متعثر",
+            "at risk", "risk",
+        ]
+        return any(keyword in question for keyword in status_keywords)
+
+    @staticmethod
+    def _build_current_academic_status_answer(profile: Optional[dict]) -> Optional[str]:
+        if not profile:
+            return None
+
+        predictions = profile.get("predictions") or []
+        if not predictions:
+            return "لا توجد حالة خطر أكاديمي حالية متاحة في البيانات."
+
+        prediction = predictions[0]
+        risk_level = prediction.get("risk_level") or "غير متوفر"
+        risk_probability = prediction.get("risk_probability")
+        at_risk = prediction.get("at_risk")
+        recommended_action = prediction.get("recommended_action")
+
+        if at_risk is True:
+            answer = f"نعم، حالتك الأكاديمية الحالية تشير إلى خطر: {risk_level}."
+        elif at_risk is False:
+            answer = f"لا، حالتك الأكاديمية الحالية لا تشير إلى خطر. مستوى الخطر: {risk_level}."
+        else:
+            answer = f"حالتك الأكاديمية الحالية: مستوى الخطر {risk_level}."
+
+        if risk_probability is not None:
+            answer += f" احتمالية الخطر: {risk_probability}."
+        if recommended_action:
+            answer += f" الإجراء المقترح حالياً: {recommended_action}."
+
+        return answer
 
     def fast_retrieval(self, question: str) -> Optional[str]:
         if not question or not question.strip():
@@ -1183,6 +1214,21 @@ class IUGChatbot:
             (s for s in rankings_data if s.get("student_id") == session_id), None
         )
         postgres_profile = None if current_student else get_postgres_student_profile(session_id)
+
+        if self._is_academic_status_question(question):
+            if postgres_profile:
+                status_answer = self._build_current_academic_status_answer(postgres_profile)
+                if status_answer:
+                    self.push_history(session_id, question, status_answer)
+                    return {"answer": status_answer, "top_chunks": []}
+            if current_student:
+                status_answer = (
+                    f"حالتك الأكاديمية الحالية: المعدل التراكمي {current_student['gpa']}، "
+                    f"والترتيب على الدفعة {current_student['rank']}."
+                )
+                self.push_history(session_id, question, status_answer)
+                return {"answer": status_answer, "top_chunks": []}
+
         if asking_about_ranking:
             other_names = [
                 s["student_name"].split()[0]
@@ -1213,16 +1259,6 @@ class IUGChatbot:
             context = "\n\n---\n\n".join([student_context_chunk] + general_chunks)
         else:
             context = "\n\n---\n\n".join(general_chunks)
-
-        # ── Step 1e: إضافة chunks الملفات المرفوعة إلى الـ context ─────────────
-        all_uploaded_chunks = [
-            chunk
-            for chunks in self._uploaded_chunks.values()
-            for chunk in chunks
-        ]
-        if all_uploaded_chunks:
-            uploaded_context = "\n\n---\n\n".join(all_uploaded_chunks)
-            context = context + "\n\n---\n\n[معلومات إضافية من ملفات مرفوعة]\n" + uploaded_context
 
         # ── Step 2: build prompt ─────────────────────────────────────────────
         identity_note = ""
@@ -1264,6 +1300,7 @@ class IUGChatbot:
                 {"role": "user",   "content": user_message},
             ],
             "temperature": 0.05,
+            "max_tokens": LLM_MAX_TOKENS,
         }
 
         answer = self._call_groq(headers, payload)
